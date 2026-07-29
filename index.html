@@ -63,7 +63,7 @@ const MODEL   = 'plant_growth_full.min.glb';
 const TARGETS = 'targets.mind';
 const FPS     = 2.5;        // growth steps per second
 const END_HOLD = 2.0;       // seconds to hold the grown plant before looping
-const CROSSFADE = 0.28;     // seconds to dissolve between steps (0 = hard cut)
+const CROSSFADE = 0.35;     // seconds to blend between steps (0 = hard cut)
 
 // MindAR normalises an anchor so the TARGET IMAGE IS 1 UNIT WIDE, so the model's
 // real metres must be divided by the target's true width -- and that differs per
@@ -116,11 +116,12 @@ async function boot() {
     m.material.vertexColors = true;
     m.material.side = THREE.DoubleSide;
     m.material.flatShading = true;
-    // alphaHash dissolves via stochastic discard rather than alpha blending, so
-    // the mesh stays in the opaque pass: depth still writes, nothing needs
-    // sorting, and two overlapping frames never ghost through each other.
-    m.material.alphaHash = CROSSFADE > 0;
-    m.material.transparent = false;
+    // Alpha blending rather than alphaHash dithering: the dither is grain-free of
+    // ghosting but reads as crunchy up close. Blending trades that for a soft
+    // double-exposure, which is the look we want here.
+    m.material.alphaHash = false;
+    m.material.transparent = true;
+    m.material.depthWrite = true;         // leaves must still self-occlude
     m.material.opacity = i === 0 ? 1 : 0;
     m.material.needsUpdate = true;
   });
@@ -159,9 +160,12 @@ async function boot() {
     if (frames.length && prev >= 0) {
       fade += dt;
       const t = Math.min(1, fade / CROSSFADE);
-      frames[cur].material.opacity = t;
-      frames[prev].material.opacity = 1 - t;
-      if (t >= 1) { frames[prev].visible = false; prev = -1; }
+      frames[cur].material.opacity = t;      // outgoing stays at 1 underneath
+      if (t >= 1) {
+        frames[prev].visible = false;
+        frames[cur].material.depthWrite = true;
+        prev = -1;
+      }
     }
     if (frames.length) {
       if (cur === frames.length - 1) {
@@ -186,6 +190,17 @@ function show(i) {
       frames[prev].material.opacity = 0;
     }
     prev = cur; fade = 0;
+    // A correct cross-dissolve fades ONE layer. Fading both means neither is
+    // opaque, so the background shows through and the plant visibly dims
+    // mid-transition (at t=0.5 you get 0.5*out + 0.25*in over black).
+    // So: the outgoing frame stays fully opaque underneath and owns the depth
+    // buffer; the incoming one fades in on top of it, giving exactly
+    // t*in + (1-t)*out.
+    frames[prev].material.opacity = 1;
+    frames[prev].material.depthWrite = true;
+    frames[prev].renderOrder = 0;
+    frames[next].material.depthWrite = false;   // must not occlude before it shows
+    frames[next].renderOrder = 1;
     frames[prev].visible = true;
     frames[next].visible = true;
     frames[next].material.opacity = 0;
