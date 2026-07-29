@@ -59,8 +59,8 @@ import { GLTFLoader }  from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { MindARThree } from 'mindar-image-three';
 
-const MODEL   = 'plant_growth_full.min.glb?v=b3295e31';
-const TARGETS = 'targets.mind?v=b3295e31';
+const MODEL   = 'plant_growth_full.min.glb?v=2238af5c';
+const TARGETS = 'targets.mind?v=2238af5c';
 const FPS     = 8;          // growth steps per second
 const END_HOLD = 2.0;       // seconds to hold the grown plant before looping
 const CROSSFADE = 0;        // 0 = hard cut. With a frame per simulation step at
@@ -78,7 +78,7 @@ const CROSSFADE = 0;        // 0 = hard cut. With a frame per simulation step at
 // plant would sprout out of the mat instead.
 const TARGETS_CFG = [
   { label: 'QR close-up',  widthM: 0.050, qrY: 0      },
-  { label: 'tomato band',  widthM: 0.180, qrY: 0.4778 },
+  { label: 'tomato band',  widthM: 0.180, qrY: 0.3000 },   // band moved up on the new cover
 ];
 
 
@@ -90,7 +90,7 @@ function makeLoader() {
   return new GLTFLoader().setDRACOLoader(draco);
 }
 
-const BUILD = '106f-8fps';           // shown in the HUD so a stale cache is obvious
+const BUILD = '106f-8fps-cover2';    // shown in the HUD so a stale cache is obvious
 const $ = id => document.getElementById(id);
 let frames = [], meta = null, cur = 0, prev = -1, acc = 0, hold = 0, fade = 0, plant = null, anchors = [];
 
