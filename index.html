@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Vertical Farming — AR</title>
+<style>
+  :root { color-scheme: dark; }
+  html,body { margin:0; height:100%; overflow:hidden; background:#11090d; color:#FFF8FA;
+              font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  #container { position:fixed; inset:0; }
+  #container video { object-fit:cover; }
+  .overlay { position:fixed; inset:0; display:grid; place-content:center; text-align:center;
+             padding:32px; gap:18px; background:rgba(17,9,13,.94); z-index:10; }
+  /* must come after .overlay: a class rule outranks the UA [hidden] rule, so
+     without this the hidden error panel renders on top of everything */
+  .overlay[hidden] { display:none; }
+  .overlay h1 { font-size:22px; margin:0; font-weight:600; }
+  .overlay p  { margin:0; opacity:.75; max-width:30ch; }
+  button { background:#FFF8FA; color:#34262E; border:0; border-radius:999px;
+           padding:13px 26px; font-weight:600; font-size:16px; }
+  #hint { position:fixed; left:0; right:0; bottom:0; z-index:5; pointer-events:none;
+          padding:18px 20px calc(18px + env(safe-area-inset-bottom)); text-align:center;
+          background:linear-gradient(to top,rgba(17,9,13,.85),transparent);
+          transition:opacity .3s; }
+  #hint.hidden { opacity:0; }
+  #hud { position:fixed; top:0; left:0; z-index:5; pointer-events:none;
+         padding:14px 18px calc(14px + env(safe-area-inset-top));
+         text-shadow:0 1px 4px rgba(0,0,0,.7); font-variant-numeric:tabular-nums; }
+  #hud b { font-size:19px; }
+</style>
+</head>
+<body>
+<div id="container"></div>
+<div id="hud"></div>
+<div id="hint" class="hidden">Point the camera at the book cover</div>
+
+<div class="overlay" id="gate">
+  <h1>Vertical Farming</h1>
+  <p>Point your camera at the cover and watch the plant grow.</p>
+  <button id="go">Start</button>
+  <p style="font-size:13px;opacity:.5">Needs camera access. Works in Safari and Chrome.</p>
+</div>
+<div class="overlay" id="fail" hidden>
+  <h1>Could not start</h1><p id="failmsg"></p>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+  "mindar-image-three": "./vendor/mindar/mindar-image-three.prod.js"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader }  from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { MindARThree } from 'mindar-image-three';
+
+const MODEL   = 'plant_growth_full.min.glb';
+const TARGETS = 'targets.mind';
+const FPS     = 6;
+
+// MindAR normalises an anchor so the TARGET IMAGE IS 1 UNIT WIDE. Our tracked
+// panel is the 180 mm cover, so one unit = 0.18 m and the model's real metres
+// must be scaled by 1/0.18 to sit at true relative size on the cover.
+const PANEL_WIDTH_M = 0.180;
+const M_TO_UNITS    = 1 / PANEL_WIDTH_M;
+
+
+// Geometry is Draco-compressed (5.8 MB -> 0.8 MB, surface area unchanged to
+// within 0.02%). The decoder is served locally from ./draco/ so the page has no
+// runtime dependency on a CDN.
+function makeLoader() {
+  const draco = new DRACOLoader().setDecoderPath('./draco/');
+  return new GLTFLoader().setDRACOLoader(draco);
+}
+
+const $ = id => document.getElementById(id);
+let frames = [], meta = null, cur = 0, acc = 0, plant = null, anchors = [];
+
+async function boot() {
+  const mindar = new MindARThree({
+    container: $('container'),
+    imageTargetSrc: TARGETS,
+    uiScanning: 'no', uiLoading: 'no',
+  });
+  const { renderer, scene, camera } = mindar;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x443355, 2.4));
+  const key = new THREE.DirectionalLight(0xffffff, 1.8);
+  key.position.set(0.5, 1, 0.8);
+  scene.add(key);
+
+  const gltf = await makeLoader().loadAsync(MODEL);
+  meta = gltf.parser.json.extras || {};
+  gltf.scene.traverse(o => { if (o.isMesh) frames.push(o); });
+  frames.forEach((m, i) => {
+    m.visible = i === 0;
+    m.material.vertexColors = true;
+    m.material.side = THREE.DoubleSide;
+    m.material.flatShading = true;
+    m.material.needsUpdate = true;
+  });
+
+  // The GLB is Y-up in metres. An anchor's plane is the cover itself, with +Z
+  // out of the page, so rotating +90 deg about X stands the plant up on the
+  // cover instead of lying flat across it.
+  plant = new THREE.Group();
+  plant.add(gltf.scene);
+  plant.scale.setScalar(M_TO_UNITS);
+  plant.rotation.x = Math.PI / 2;
+
+  // Two targets: 0 = front cover, 1 = back cover. A three.js object can only
+  // have one parent, so the plant is re-parented to whichever target is in view.
+  for (const i of [0, 1]) {
+    const a = mindar.addAnchor(i);
+    a.onTargetFound = () => {
+      a.group.add(plant);
+      $('hint').classList.add('hidden');
+    };
+    a.onTargetLost = () => $('hint').classList.remove('hidden');
+    anchors.push(a);
+  }
+
+  await mindar.start();
+  $('gate').remove();
+  $('hint').classList.remove('hidden');
+
+  let last = performance.now();
+  renderer.setAnimationLoop(now => {
+    const dt = (now - last) / 1000; last = now;
+    acc += dt;
+    if (frames.length && acc >= 1 / FPS) { acc = 0; step(); }
+    renderer.render(scene, camera);
+  });
+}
+
+function step() {
+  frames[cur].visible = false;
+  cur = (cur + 1) % frames.length;
+  frames[cur].visible = true;
+  const h = meta?.heights_m?.[cur];
+  $('hud').innerHTML = `<b>${(cur + 1)}/${frames.length}</b> ` +
+    (meta?.frames?.[cur] ?? '') + (h ? `<br>${(h * 100).toFixed(0)} cm` : '');
+}
+
+$('go').onclick = () => {
+  $('go').disabled = true; $('go').textContent = 'Starting…';
+  boot().catch(e => {
+    $('gate').remove();
+    $('fail').hidden = false;
+    $('failmsg').textContent = e?.message || String(e);
+  });
+};
+</script>
+</body>
+</html>
