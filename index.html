@@ -59,8 +59,8 @@ import { GLTFLoader }  from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { MindARThree } from 'mindar-image-three';
 
-const MODEL   = 'plant_growth_full.min.glb';
-const TARGETS = 'targets.mind';
+const MODEL   = 'plant_growth_full.min.glb?v=b3295e31';
+const TARGETS = 'targets.mind?v=b3295e31';
 const FPS     = 12 ;        // growth steps per second
 const END_HOLD = 2.0;       // seconds to hold the grown plant before looping
 const CROSSFADE = 0;        // 0 = hard cut. With a frame per simulation step at
@@ -90,6 +90,7 @@ function makeLoader() {
   return new GLTFLoader().setDRACOLoader(draco);
 }
 
+const BUILD = '106f-12fps-nofade';   // shown in the HUD so a stale cache is obvious
 const $ = id => document.getElementById(id);
 let frames = [], meta = null, cur = 0, prev = -1, acc = 0, hold = 0, fade = 0, plant = null, anchors = [];
 
@@ -214,7 +215,8 @@ function show(i) {
   cur = next;
   const h = meta?.heights_m?.[cur];
   $('hud').innerHTML = `<b>${(cur + 1)}/${frames.length}</b> ` +
-    (meta?.frames?.[cur] ?? '') + (h ? `<br>${(h * 100).toFixed(0)} cm` : '');
+    (meta?.frames?.[cur] ?? '') + (h ? `<br>${(h * 100).toFixed(0)} cm` : '') +
+    `<br><span style="font-size:11px;opacity:.55">${BUILD}</span>`;
 }
 
 $('go').onclick = () => {
