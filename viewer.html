@@ -50,8 +50,8 @@ import { ARButton }      from 'three/addons/webxr/ARButton.js';
 
 // ?model=plant_growth_full.glb to view a different build
 const MODEL = new URLSearchParams(location.search).get('model') || 'plant_growth_full.min.glb';
-const FPS   = 2.5;                    // growth steps per second
-const CROSSFADE = 0.35;               // seconds to blend between steps (0 = hard cut)
+const FPS   = 12 ;                    // growth steps per second
+const CROSSFADE = 0;                  // 0 = hard cut; see ar.html for why
 
 const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -102,7 +102,7 @@ makeLoader().load(MODEL, gltf => {
     // ghosting but reads as crunchy up close. Blending trades that for a soft
     // double-exposure, which is the look we want here.
     m.material.alphaHash = false;
-    m.material.transparent = true;
+    m.material.transparent = CROSSFADE > 0;
     m.material.depthWrite = true;         // leaves must still self-occlude
     m.material.opacity = i === 0 ? 1 : 0;
     m.material.needsUpdate = true;

@@ -61,9 +61,11 @@ import { MindARThree } from 'mindar-image-three';
 
 const MODEL   = 'plant_growth_full.min.glb';
 const TARGETS = 'targets.mind';
-const FPS     = 2.5;        // growth steps per second
+const FPS     = 12 ;        // growth steps per second
 const END_HOLD = 2.0;       // seconds to hold the grown plant before looping
-const CROSSFADE = 0.35;     // seconds to blend between steps (0 = hard cut)
+const CROSSFADE = 0;        // 0 = hard cut. With a frame per simulation step at
+                            // 12 fps the steps are already sub-perceptual, and a
+                            // fade only reintroduces ghosting.
 
 // MindAR normalises an anchor so the TARGET IMAGE IS 1 UNIT WIDE, so the model's
 // real metres must be divided by the target's true width -- and that differs per
@@ -120,7 +122,7 @@ async function boot() {
     // ghosting but reads as crunchy up close. Blending trades that for a soft
     // double-exposure, which is the look we want here.
     m.material.alphaHash = false;
-    m.material.transparent = true;
+    m.material.transparent = CROSSFADE > 0;
     m.material.depthWrite = true;         // leaves must still self-occlude
     m.material.opacity = i === 0 ? 1 : 0;
     m.material.needsUpdate = true;
