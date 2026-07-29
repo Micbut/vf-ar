@@ -61,13 +61,17 @@ import { MindARThree } from 'mindar-image-three';
 
 const MODEL   = 'plant_growth_full.min.glb';
 const TARGETS = 'targets.mind';
-const FPS     = 6;
+const FPS     = 2.5;        // growth steps per second
+const END_HOLD = 2.0;       // seconds to hold the grown plant before looping
 
-// MindAR normalises an anchor so the TARGET IMAGE IS 1 UNIT WIDE. Our tracked
-// panel is the 180 mm cover, so one unit = 0.18 m and the model's real metres
-// must be scaled by 1/0.18 to sit at true relative size on the cover.
-const PANEL_WIDTH_M = 0.180;
-const M_TO_UNITS    = 1 / PANEL_WIDTH_M;
+// MindAR normalises an anchor so the TARGET IMAGE IS 1 UNIT WIDE, so the model's
+// real metres must be divided by the target's true width -- and that differs per
+// target. Both targets are centred on the QR, so the plant grows out of the code
+// either way; the QR one just lets you hold the phone close.
+const TARGET_WIDTH_M = [
+  0.050,   // 0 = QR close-up
+  0.180,   // 1 = whole back panel
+];
 
 
 // Geometry is Draco-compressed (5.8 MB -> 0.8 MB, surface area unchanged to
@@ -79,7 +83,7 @@ function makeLoader() {
 }
 
 const $ = id => document.getElementById(id);
-let frames = [], meta = null, cur = 0, acc = 0, plant = null, anchors = [];
+let frames = [], meta = null, cur = 0, acc = 0, hold = 0, plant = null, anchors = [];
 
 async function boot() {
   const mindar = new MindARThree({
@@ -111,20 +115,23 @@ async function boot() {
   // cover instead of lying flat across it.
   plant = new THREE.Group();
   plant.add(gltf.scene);
-  plant.scale.setScalar(M_TO_UNITS);
   plant.rotation.x = Math.PI / 2;
 
-  // Two targets: 0 = front cover, 1 = back cover. A three.js object can only
-  // have one parent, so the plant is re-parented to whichever target is in view.
-  for (const i of [0, 1]) {
+  // A three.js object can only have one parent, so the plant is re-parented to
+  // whichever target is in view -- and rescaled, because the two targets are
+  // different physical sizes.
+  TARGET_WIDTH_M.forEach((widthM, i) => {
     const a = mindar.addAnchor(i);
     a.onTargetFound = () => {
+      plant.scale.setScalar(1 / widthM);
       a.group.add(plant);
+      cur = 0; acc = 0; hold = 0;      // restart the growth on each acquisition
+      frames.forEach((m, k) => m.visible = k === 0);
       $('hint').classList.add('hidden');
     };
     a.onTargetLost = () => $('hint').classList.remove('hidden');
     anchors.push(a);
-  }
+  });
 
   await mindar.start();
   $('gate').remove();
@@ -133,15 +140,23 @@ async function boot() {
   let last = performance.now();
   renderer.setAnimationLoop(now => {
     const dt = (now - last) / 1000; last = now;
-    acc += dt;
-    if (frames.length && acc >= 1 / FPS) { acc = 0; step(); }
+    if (frames.length) {
+      if (cur === frames.length - 1) {
+        // hold the fully grown plant for a beat, then start again
+        hold += dt;
+        if (hold >= END_HOLD) { hold = 0; acc = 0; show(0); }
+      } else {
+        acc += dt;
+        if (acc >= 1 / FPS) { acc = 0; show(cur + 1); }
+      }
+    }
     renderer.render(scene, camera);
   });
 }
 
-function step() {
+function show(i) {
   frames[cur].visible = false;
-  cur = (cur + 1) % frames.length;
+  cur = (i + frames.length) % frames.length;
   frames[cur].visible = true;
   const h = meta?.heights_m?.[cur];
   $('hud').innerHTML = `<b>${(cur + 1)}/${frames.length}</b> ` +

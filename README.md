@@ -1,7 +1,7 @@
 # Vertical Farming — AR plant growth
 
-Point a phone camera at the thesis cover and an FSPM-simulated tomato plant
-grows out of it.
+Point a phone camera at the QR code on the thesis back cover and an
+FSPM-simulated tomato plant grows out of it.
 
 Built from a GroIMP functional–structural plant model growth sequence.
 Image tracking by [MindAR](https://github.com/hiukim/mind-ar-js) (MIT),
