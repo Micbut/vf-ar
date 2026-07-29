@@ -61,7 +61,7 @@ import { MindARThree } from 'mindar-image-three';
 
 const MODEL   = 'plant_growth_full.min.glb?v=b3295e31';
 const TARGETS = 'targets.mind?v=b3295e31';
-const FPS     = 12 ;        // growth steps per second
+const FPS     = 8;          // growth steps per second
 const END_HOLD = 2.0;       // seconds to hold the grown plant before looping
 const CROSSFADE = 0;        // 0 = hard cut. With a frame per simulation step at
                             // 12 fps the steps are already sub-perceptual, and a
@@ -90,7 +90,7 @@ function makeLoader() {
   return new GLTFLoader().setDRACOLoader(draco);
 }
 
-const BUILD = '106f-12fps-nofade';   // shown in the HUD so a stale cache is obvious
+const BUILD = '106f-8fps';           // shown in the HUD so a stale cache is obvious
 const $ = id => document.getElementById(id);
 let frames = [], meta = null, cur = 0, prev = -1, acc = 0, hold = 0, fade = 0, plant = null, anchors = [];
 

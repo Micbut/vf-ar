@@ -50,7 +50,7 @@ import { ARButton }      from 'three/addons/webxr/ARButton.js';
 
 // ?model=plant_growth_full.glb to view a different build
 const MODEL = new URLSearchParams(location.search).get('model') || 'plant_growth_full.min.glb';
-const FPS   = 12 ;                    // growth steps per second
+const FPS   = 8;                      // growth steps per second
 const CROSSFADE = 0;                  // 0 = hard cut; see ar.html for why
 
 const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
