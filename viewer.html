@@ -50,7 +50,8 @@ import { ARButton }      from 'three/addons/webxr/ARButton.js';
 
 // ?model=plant_growth_full.glb to view a different build
 const MODEL = new URLSearchParams(location.search).get('model') || 'plant_growth_full.min.glb';
-const FPS   = 6;                      // growth steps per second
+const FPS   = 2.5;                    // growth steps per second
+const CROSSFADE = 0.28;               // seconds to dissolve between steps
 
 const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -74,7 +75,7 @@ scene.add(group);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
-let frames = [], cur = 0, playing = true, acc = 0, meta = null;
+let frames = [], cur = 0, prev = -1, playing = true, acc = 0, fade = 0, meta = null;
 
 // Geometry is Draco-compressed (5.8 MB -> 0.8 MB, surface area unchanged to
 // within 0.02%). The decoder is served locally from ./draco/ so the page has no
@@ -92,9 +93,13 @@ makeLoader().load(MODEL, gltf => {
   gltf.scene.traverse(o => { if (o.isMesh) frames.push(o); });
   frames.forEach((m, i) => {
     m.visible = i === 0;
+    // all primitives share material 0 in the .glb -- clone so they fade apart
+    m.material = m.material.clone();
     m.material.vertexColors = true;
     m.material.side = THREE.DoubleSide;   // back-faces were stripped at build time
     m.material.flatShading = true;        // no NORMAL attribute: shade per face
+    m.material.alphaHash = CROSSFADE > 0; // dithered dissolve, stays depth-correct
+    m.material.opacity = i === 0 ? 1 : 0;
     m.material.needsUpdate = true;
   });
   group.add(gltf.scene);
@@ -132,8 +137,18 @@ makeLoader().load(MODEL, gltf => {
 
 function show(i) {
   if (!frames.length) return;
-  frames[cur].visible = false;
-  cur = (i + frames.length) % frames.length;
+  const next = (i + frames.length) % frames.length;
+  if (next !== cur && CROSSFADE > 0) {
+    if (prev >= 0 && prev !== cur) { frames[prev].visible = false; frames[prev].material.opacity = 0; }
+    prev = cur; fade = 0;
+    frames[prev].visible = true;
+    frames[next].visible = true;
+    frames[next].material.opacity = 0;
+  } else if (next !== cur) {
+    frames[cur].visible = false;
+    frames[next].material.opacity = 1;
+  }
+  cur = next;
   frames[cur].visible = true;
   $('scrub').value = cur;
   $('frameNo').textContent = (cur+1) + '/' + frames.length;
@@ -152,6 +167,13 @@ addEventListener('resize', () => {
 let last = performance.now();
 renderer.setAnimationLoop(now => {
   const dt = (now - last)/1000; last = now;
+  if (frames.length && prev >= 0) {
+    fade += dt;
+    const t = Math.min(1, fade / CROSSFADE);
+    frames[cur].material.opacity = t;
+    frames[prev].material.opacity = 1 - t;
+    if (t >= 1) { frames[prev].visible = false; prev = -1; }
+  }
   if (playing && frames.length) { acc += dt; if (acc >= 1/FPS) { acc = 0; show(cur+1); } }
   controls.update();
   renderer.render(scene, camera);

@@ -63,6 +63,7 @@ const MODEL   = 'plant_growth_full.min.glb';
 const TARGETS = 'targets.mind';
 const FPS     = 2.5;        // growth steps per second
 const END_HOLD = 2.0;       // seconds to hold the grown plant before looping
+const CROSSFADE = 0.28;     // seconds to dissolve between steps (0 = hard cut)
 
 // MindAR normalises an anchor so the TARGET IMAGE IS 1 UNIT WIDE, so the model's
 // real metres must be divided by the target's true width -- and that differs per
@@ -88,7 +89,7 @@ function makeLoader() {
 }
 
 const $ = id => document.getElementById(id);
-let frames = [], meta = null, cur = 0, acc = 0, hold = 0, plant = null, anchors = [];
+let frames = [], meta = null, cur = 0, prev = -1, acc = 0, hold = 0, fade = 0, plant = null, anchors = [];
 
 async function boot() {
   const mindar = new MindARThree({
@@ -109,9 +110,18 @@ async function boot() {
   gltf.scene.traverse(o => { if (o.isMesh) frames.push(o); });
   frames.forEach((m, i) => {
     m.visible = i === 0;
+    // Every primitive in the .glb points at material 0, so GLTFLoader hands them
+    // all the SAME material instance -- fading one would fade all 56. Clone it.
+    m.material = m.material.clone();
     m.material.vertexColors = true;
     m.material.side = THREE.DoubleSide;
     m.material.flatShading = true;
+    // alphaHash dissolves via stochastic discard rather than alpha blending, so
+    // the mesh stays in the opaque pass: depth still writes, nothing needs
+    // sorting, and two overlapping frames never ghost through each other.
+    m.material.alphaHash = CROSSFADE > 0;
+    m.material.transparent = false;
+    m.material.opacity = i === 0 ? 1 : 0;
     m.material.needsUpdate = true;
   });
 
@@ -131,8 +141,8 @@ async function boot() {
       plant.scale.setScalar(1 / cfg.widthM);
       plant.position.set(0, cfg.qrY, 0);
       a.group.add(plant);
-      cur = 0; acc = 0; hold = 0;      // restart the growth on each acquisition
-      frames.forEach((m, k) => m.visible = k === 0);
+      cur = 0; prev = -1; acc = 0; hold = 0; fade = 0;   // restart on acquisition
+      frames.forEach((m, k) => { m.visible = k === 0; m.material.opacity = k === 0 ? 1 : 0; });
       $('hint').classList.add('hidden');
     };
     a.onTargetLost = () => $('hint').classList.remove('hidden');
@@ -146,6 +156,13 @@ async function boot() {
   let last = performance.now();
   renderer.setAnimationLoop(now => {
     const dt = (now - last) / 1000; last = now;
+    if (frames.length && prev >= 0) {
+      fade += dt;
+      const t = Math.min(1, fade / CROSSFADE);
+      frames[cur].material.opacity = t;
+      frames[prev].material.opacity = 1 - t;
+      if (t >= 1) { frames[prev].visible = false; prev = -1; }
+    }
     if (frames.length) {
       if (cur === frames.length - 1) {
         // hold the fully grown plant for a beat, then start again
@@ -161,9 +178,23 @@ async function boot() {
 }
 
 function show(i) {
-  frames[cur].visible = false;
-  cur = (i + frames.length) % frames.length;
-  frames[cur].visible = true;
+  const next = (i + frames.length) % frames.length;
+  if (next === cur) return;
+  if (CROSSFADE > 0) {
+    if (prev >= 0 && prev !== cur) {          // previous fade never finished
+      frames[prev].visible = false;
+      frames[prev].material.opacity = 0;
+    }
+    prev = cur; fade = 0;
+    frames[prev].visible = true;
+    frames[next].visible = true;
+    frames[next].material.opacity = 0;
+  } else {
+    frames[cur].visible = false;
+    frames[next].visible = true;
+    frames[next].material.opacity = 1;
+  }
+  cur = next;
   const h = meta?.heights_m?.[cur];
   $('hud').innerHTML = `<b>${(cur + 1)}/${frames.length}</b> ` +
     (meta?.frames?.[cur] ?? '') + (h ? `<br>${(h * 100).toFixed(0)} cm` : '');
