@@ -61,16 +61,21 @@ import { MindARThree } from 'mindar-image-three';
 
 const MODEL   = 'plant_growth_full.min.glb';
 const TARGETS = 'targets.mind';
-const FPS     = 2.5;        // growth steps per second
+const FPS     = 2.0;        // growth steps per second
 const END_HOLD = 2.0;       // seconds to hold the grown plant before looping
 
 // MindAR normalises an anchor so the TARGET IMAGE IS 1 UNIT WIDE, so the model's
 // real metres must be divided by the target's true width -- and that differs per
-// target. Both targets are centred on the QR, so the plant grows out of the code
-// either way; the QR one just lets you hold the phone close.
-const TARGET_WIDTH_M = [
-  0.050,   // 0 = QR close-up
-  0.180,   // 1 = whole back panel
+// target.
+//
+// qrY is where the QR sits relative to the target's own centre, in anchor units,
+// positive towards the top of the cover. The QR target is centred on the code so
+// it needs no offset; the tomato band sits 86 mm lower down the panel, so the
+// plant is pushed back up to the code (86/180 = 0.478 units). Without this the
+// plant would sprout out of the mat instead.
+const TARGETS_CFG = [
+  { label: 'QR close-up',  widthM: 0.050, qrY: 0      },
+  { label: 'tomato band',  widthM: 0.180, qrY: 0.4778 },
 ];
 
 
@@ -120,10 +125,11 @@ async function boot() {
   // A three.js object can only have one parent, so the plant is re-parented to
   // whichever target is in view -- and rescaled, because the two targets are
   // different physical sizes.
-  TARGET_WIDTH_M.forEach((widthM, i) => {
+  TARGETS_CFG.forEach((cfg, i) => {
     const a = mindar.addAnchor(i);
     a.onTargetFound = () => {
-      plant.scale.setScalar(1 / widthM);
+      plant.scale.setScalar(1 / cfg.widthM);
+      plant.position.set(0, cfg.qrY, 0);
       a.group.add(plant);
       cur = 0; acc = 0; hold = 0;      // restart the growth on each acquisition
       frames.forEach((m, k) => m.visible = k === 0);
