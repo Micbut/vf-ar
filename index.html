@@ -76,10 +76,23 @@ const CROSSFADE = 0;        // 0 = hard cut. With a frame per simulation step at
 // it needs no offset; the tomato band sits 86 mm lower down the panel, so the
 // plant is pushed back up to the code (86/180 = 0.478 units). Without this the
 // plant would sprout out of the mat instead.
+//
+// qrW is the QR's side (incl. quiet zone) in anchor units: the QR fills 45/50
+// of the close-up target image. The plant is sized in QR widths, not metres, so
+// it always keeps the same proportion to the code it stands on, whatever size
+// the code is printed at and however far away the phone is.
+//
+// The QR is now printed only on the invitation, so the cover's tomato band
+// (index 1 in targets.mind) gets no anchor: if it were matched it would swap in
+// a different scale and the plant would jump in size.
 const TARGETS_CFG = [
-  { label: 'QR close-up',  widthM: 0.050, qrY: 0      },
-  { label: 'tomato band',  widthM: 0.180, qrY: 0.3000 },   // band moved up on the new cover
+  { label: 'QR close-up',  qrW: 45 / 50,  qrY: 0      },
 ];
+
+// Largest dimension of the fully grown plant, in QR widths. The invitation's QR
+// is 69.5 mm, so 30 cm there is 300/69.5 = 4.3 QR widths.
+const PLANT_MAX_QR = 300 / 69.5;
+const QR_REAL_M = 0.0695;   // only used to print the HUD size, in invitation cm
 
 
 // Geometry is Draco-compressed (5.8 MB -> 0.8 MB, surface area unchanged to
@@ -90,8 +103,9 @@ function makeLoader() {
   return new GLTFLoader().setDRACOLoader(draco);
 }
 
-const BUILD = '106f-8fps-selfhosted';  // shown in the HUD so a stale cache is obvious
+const BUILD = 'qr-scaled-30cm';  // shown in the HUD so a stale cache is obvious
 const $ = id => document.getElementById(id);
+let plantMaxM = 1;
 let frames = [], meta = null, cur = 0, prev = -1, acc = 0, hold = 0, fade = 0, plant = null, anchors = [];
 
 async function boot() {
@@ -111,6 +125,9 @@ async function boot() {
   const gltf = await makeLoader().loadAsync(MODEL);
   meta = gltf.parser.json.extras || {};
   gltf.scene.traverse(o => { if (o.isMesh) frames.push(o); });
+  // Largest extent over all growth steps (the grown plant), in model metres.
+  const size = new THREE.Box3().setFromObject(gltf.scene).getSize(new THREE.Vector3());
+  plantMaxM = Math.max(size.x, size.y, size.z);
   frames.forEach((m, i) => {
     m.visible = i === 0;
     // Every primitive in the .glb points at material 0, so GLTFLoader hands them
@@ -137,12 +154,12 @@ async function boot() {
   plant.rotation.x = Math.PI / 2;
 
   // A three.js object can only have one parent, so the plant is re-parented to
-  // whichever target is in view -- and rescaled, because the two targets are
-  // different physical sizes.
+  // whichever target is in view -- and rescaled, because the QR takes up a
+  // different share of each target.
   TARGETS_CFG.forEach((cfg, i) => {
     const a = mindar.addAnchor(i);
     a.onTargetFound = () => {
-      plant.scale.setScalar(1 / cfg.widthM);
+      plant.scale.setScalar(PLANT_MAX_QR * cfg.qrW / plantMaxM);
       plant.position.set(0, cfg.qrY, 0);
       a.group.add(plant);
       cur = 0; prev = -1; acc = 0; hold = 0; fade = 0;   // restart on acquisition
@@ -215,7 +232,7 @@ function show(i) {
   cur = next;
   const h = meta?.heights_m?.[cur];
   $('hud').innerHTML = `<b>${(cur + 1)}/${frames.length}</b> ` +
-    (meta?.frames?.[cur] ?? '') + (h ? `<br>${(h * 100).toFixed(0)} cm` : '') +
+    (meta?.frames?.[cur] ?? '') + (h ? `<br>${(h / plantMaxM * PLANT_MAX_QR * QR_REAL_M * 100).toFixed(0)} cm` : '') +
     `<br><span style="font-size:11px;opacity:.55">${BUILD}</span>`;
 }
 
