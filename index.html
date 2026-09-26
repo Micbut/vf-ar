@@ -8,8 +8,10 @@
   :root { color-scheme: dark; }
   html,body { margin:0; height:100%; overflow:hidden; background:#11090d; color:#FFF8FA;
               font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-  #container { position:fixed; inset:0; }
-  #container video { object-fit:cover; }
+  /* The video and the WebGL canvas are both drawn at the camera's native
+     resolution and cropped to the screen the same way, so they line up exactly
+     without any coordinate mapping. */
+  #cam, #gl { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; }
   .overlay { position:fixed; inset:0; display:grid; place-content:center; text-align:center;
              padding:32px; gap:18px; background:rgba(17,9,13,.94); z-index:10; }
   /* must come after .overlay: a class rule outranks the UA [hidden] rule, so
@@ -31,7 +33,8 @@
 </style>
 </head>
 <body>
-<div id="container"></div>
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="gl"></canvas>
 <div id="hud"></div>
 <div id="hint" class="hidden">Point the camera at the QR code</div>
 
@@ -48,8 +51,7 @@
 <script type="importmap">
 { "imports": {
   "three": "./vendor/three/three.module.js",
-  "three/addons/": "./vendor/three/addons/",
-  "mindar-image-three": "./vendor/mindar/mindar-image-three.prod.js"
+  "three/addons/": "./vendor/three/addons/"
 }}
 </script>
 
@@ -57,43 +59,42 @@
 import * as THREE from 'three';
 import { GLTFLoader }  from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
-import { MindARThree } from 'mindar-image-three';
 
-const MODEL   = 'plant_growth_full.min.glb?v=2238af5c';
-const TARGETS = 'targets.mind?v=2238af5c';
+const MODEL   = 'plant_growth_full.min.glb?v=065ebbe0';
+const WORKER  = 'qr-worker.js?v=065ebbe0';
 const FPS     = 8;          // growth steps per second
 const END_HOLD = 2.0;       // seconds to hold the grown plant before looping
 const CROSSFADE = 0;        // 0 = hard cut. With a frame per simulation step at
                             // 12 fps the steps are already sub-perceptual, and a
                             // fade only reintroduces ghosting.
 
-// MindAR normalises an anchor so the TARGET IMAGE IS 1 UNIT WIDE, so the model's
-// real metres must be divided by the target's true width -- and that differs per
-// target.
+// Tracking is generic QR detection, not image matching: ANY QR code in view
+// anchors the plant, whatever its colours or surroundings. Everything is
+// measured in QR SYMBOL WIDTHS (the square jsQR finds, without the quiet zone),
+// so the plant keeps the same proportion to the code at any distance and any
+// print size.
 //
-// qrY is where the QR sits relative to the target's own centre, in anchor units,
-// positive towards the top of the cover. The QR target is centred on the code so
-// it needs no offset; the tomato band sits 86 mm lower down the panel, so the
-// plant is pushed back up to the code (86/180 = 0.478 units). Without this the
-// plant would sprout out of the mat instead.
-//
-// qrW is the QR's side (incl. quiet zone) in anchor units: the QR fills 45/50
-// of the close-up target image. The plant is sized in QR widths, not metres, so
-// it always keeps the same proportion to the code it stands on, whatever size
-// the code is printed at and however far away the phone is.
-//
-// The QR is now printed only on the invitation, so the cover's tomato band
-// (index 1 in targets.mind) gets no anchor: if it were matched it would swap in
-// a different scale and the plant would jump in size.
-const TARGETS_CFG = [
-  { label: 'QR close-up',  qrW: 45 / 50,  qrY: 0      },
-];
+// The invitation's code is 69.5 mm including a 4-module quiet zone on a
+// 41-module grid, so the symbol itself is 69.5 x 33/41 = 55.9 mm. An 18 cm
+// plant is therefore 180 / 55.9 = 3.2 symbol widths tall.
+const QR_SYMBOL_M  = 0.0695 * 33 / 41;
+const PLANT_HEIGHT_M = 0.18;
+const PLANT_H_QR = PLANT_HEIGHT_M / QR_SYMBOL_M;
 
-// Largest dimension of the fully grown plant, in QR widths. The invitation's QR
-// is 69.5 mm, so 30 cm there is 300/69.5 = 4.3 QR widths.
-const PLANT_MAX_QR = 300 / 69.5;
-const QR_REAL_M = 0.0695;   // only used to print the HUD size, in invitation cm
-
+// Camera intrinsics are not exposed to the web, so assume a typical phone main
+// camera (~26 mm equivalent): focal length ~0.75 x the frame's long side. An
+// error here only changes the perceived tilt slightly; the plant still stands
+// exactly on the code and at the right size relative to it.
+const FOCAL_K = 0.75;
+// Detection resolution. While searching, the whole frame is scanned at 960 px
+// on its long side -- enough for a code filling ~1/7 of the view (4 px/module).
+// Once found, only a crop 3x the code's size around its last position is
+// scanned: far fewer pixels, so tracking runs several times faster.
+const DET_SEARCH = 960;
+const DET_TRACK  = 480;
+const ROI_K      = 3;
+const LOST_MS = 700;        // keep the plant through brief detection dropouts
+const SMOOTH  = 18;         // pose smoothing rate (1/s); higher = snappier
 
 // Geometry is Draco-compressed (5.8 MB -> 0.8 MB, surface area unchanged to
 // within 0.02%). The decoder is served locally from ./draco/ so the page has no
@@ -103,19 +104,77 @@ function makeLoader() {
   return new GLTFLoader().setDRACOLoader(draco);
 }
 
-const BUILD = 'qr-scaled-30cm';  // shown in the HUD so a stale cache is obvious
+const BUILD = 'qr-generic-18cm';  // shown in the HUD so a stale cache is obvious
 const $ = id => document.getElementById(id);
-let plantMaxM = 1;
-let frames = [], meta = null, cur = 0, prev = -1, acc = 0, hold = 0, fade = 0, plant = null, anchors = [];
+let plantH = 1;
+let frames = [], meta = null, cur = 0, prev = -1, acc = 0, hold = 0, fade = 0;
+
+// Homography from 4 plane points to 4 image points (DLT, h33 = 1).
+function homography(src, dst) {
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const [X, Y] = src[i], [x, y] = dst[i];
+    A.push([X, Y, 1, 0, 0, 0, -x * X, -x * Y]); b.push(x);
+    A.push([0, 0, 0, X, Y, 1, -y * X, -y * Y]); b.push(y);
+  }
+  for (let c = 0; c < 8; c++) {                 // Gaussian elimination
+    let p = c;
+    for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+    [A[c], A[p]] = [A[p], A[c]]; [b[c], b[p]] = [b[p], b[c]];
+    for (let r = c + 1; r < 8; r++) {
+      const f = A[r][c] / A[c][c];
+      for (let k = c; k < 8; k++) A[r][k] -= f * A[c][k];
+      b[r] -= f * b[c];
+    }
+  }
+  const h = new Array(8);
+  for (let r = 7; r >= 0; r--) {
+    let s = b[r];
+    for (let k = r + 1; k < 8; k++) s -= A[r][k] * h[k];
+    h[r] = s / A[r][r];
+  }
+  return [[h[0], h[1], h[2]], [h[3], h[4], h[5]], [h[6], h[7], 1]];
+}
+
+// Plane frame: X right, Y up (towards the code's top edge), Z out of the paper,
+// in symbol widths with the origin at the code's centre.
+const PLANE = [[-0.5, 0.5], [0.5, 0.5], [0.5, -0.5], [-0.5, -0.5]];   // TL TR BR BL
+
+// Pose of the code in three.js camera space (x right, y up, looking down -z)
+// from its corners in video pixels.
+function poseFromCorners(pts, vw, vh, out) {
+  const f = FOCAL_K * Math.max(vw, vh), cx = vw / 2, cy = vh / 2;
+  const img = pts.map(p => [(p.x - cx) / f, (cy - p.y) / f]);   // y flipped to up
+  const H = homography(PLANE, img);
+  // [a, b, 1] ~ (x, y, -z) / depth, so [r1 r2 t] ~ diag(1,1,-1) H
+  const col = j => new THREE.Vector3(H[0][j], H[1][j], -H[2][j]);
+  const m1 = col(0), m2 = col(1), m3 = col(2);
+  let lam = 2 / (m1.length() + m2.length());
+  if (m3.z * lam > 0) lam = -lam;               // the code must be in front
+  const r1 = m1.multiplyScalar(lam).normalize();
+  const r2 = m2.multiplyScalar(lam);
+  const r3 = new THREE.Vector3().crossVectors(r1, r2).normalize();
+  r2.crossVectors(r3, r1);                      // re-orthogonalise
+  const t = m3.multiplyScalar(lam);
+  if (r3.dot(t) > 0) { r3.negate(); r1.negate(); }   // Z must face the camera
+  out.makeBasis(r1, r2, r3).setPosition(t);
+  return out;
+}
 
 async function boot() {
-  const mindar = new MindARThree({
-    container: $('container'),
-    imageTargetSrc: TARGETS,
-    uiScanning: 'no', uiLoading: 'no',
+  const video = $('cam');
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
   });
-  const { renderer, scene, camera } = mindar;
+  video.srcObject = stream;
+  await video.play();
+
+  const renderer = new THREE.WebGLRenderer({ canvas: $('gl'), antialias: true, alpha: true });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.setClearColor(0x000000, 0);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(60, 1, 0.05, 500);
 
   scene.add(new THREE.HemisphereLight(0xffffff, 0x443355, 2.4));
   const key = new THREE.DirectionalLight(0xffffff, 1.8);
@@ -125,9 +184,8 @@ async function boot() {
   const gltf = await makeLoader().loadAsync(MODEL);
   meta = gltf.parser.json.extras || {};
   gltf.scene.traverse(o => { if (o.isMesh) frames.push(o); });
-  // Largest extent over all growth steps (the grown plant), in model metres.
-  const size = new THREE.Box3().setFromObject(gltf.scene).getSize(new THREE.Vector3());
-  plantMaxM = Math.max(size.x, size.y, size.z);
+  // Height of the fully grown plant (tallest over all growth steps), model metres.
+  plantH = new THREE.Box3().setFromObject(gltf.scene).getSize(new THREE.Vector3()).y;
   frames.forEach((m, i) => {
     m.visible = i === 0;
     // Every primitive in the .glb points at material 0, so GLTFLoader hands them
@@ -136,9 +194,6 @@ async function boot() {
     m.material.vertexColors = true;
     m.material.side = THREE.DoubleSide;
     m.material.flatShading = true;
-    // Alpha blending rather than alphaHash dithering: the dither is grain-free of
-    // ghosting but reads as crunchy up close. Blending trades that for a soft
-    // double-exposure, which is the look we want here.
     m.material.alphaHash = false;
     m.material.transparent = CROSSFADE > 0;
     m.material.depthWrite = true;         // leaves must still self-occlude
@@ -146,38 +201,97 @@ async function boot() {
     m.material.needsUpdate = true;
   });
 
-  // The GLB is Y-up in metres. An anchor's plane is the cover itself, with +Z
-  // out of the page, so rotating +90 deg about X stands the plant up on the
-  // cover instead of lying flat across it.
-  plant = new THREE.Group();
+  // The GLB is Y-up in metres. The anchor's +Z points out of the paper, so
+  // rotating +90 deg about X stands the plant up on the code.
+  const plant = new THREE.Group();
   plant.add(gltf.scene);
   plant.rotation.x = Math.PI / 2;
+  plant.scale.setScalar(PLANT_H_QR / plantH);
+  const anchor = new THREE.Group();
+  anchor.add(plant);
+  anchor.visible = false;
+  scene.add(anchor);
 
-  // A three.js object can only have one parent, so the plant is re-parented to
-  // whichever target is in view -- and rescaled, because the QR takes up a
-  // different share of each target.
-  TARGETS_CFG.forEach((cfg, i) => {
-    const a = mindar.addAnchor(i);
-    a.onTargetFound = () => {
-      plant.scale.setScalar(PLANT_MAX_QR * cfg.qrW / plantMaxM);
-      plant.position.set(0, cfg.qrY, 0);
-      a.group.add(plant);
-      cur = 0; prev = -1; acc = 0; hold = 0; fade = 0;   // restart on acquisition
+  // --- detection ---------------------------------------------------------
+  const det = document.createElement('canvas');
+  const dctx = det.getContext('2d', { willReadFrequently: true });
+  const worker = new Worker(WORKER);
+  const M = new THREE.Matrix4(), tPos = new THREE.Vector3(), tQuat = new THREE.Quaternion(),
+        tScl = new THREE.Vector3();
+  let busy = false, lastSeen = -1e9, hasTarget = false, lastPts = null;
+
+  worker.onmessage = e => {
+    busy = false;
+    const { corners, ctx } = e.data;
+    if (!corners) return;
+    const pts = corners.map(p => ({ x: ctx.ox + p.x / ctx.s, y: ctx.oy + p.y / ctx.s }));
+    lastPts = pts;
+    poseFromCorners(pts, video.videoWidth, video.videoHeight, M).decompose(tPos, tQuat, tScl);
+    const now = performance.now();
+    if (now - lastSeen > LOST_MS) {
+      // (re)acquired: snap to the code and restart the growth from the seedling
+      anchor.position.copy(tPos); anchor.quaternion.copy(tQuat);
+      cur = 0; prev = -1; acc = 0; hold = 0; fade = 0;
       frames.forEach((m, k) => { m.visible = k === 0; m.material.opacity = k === 0 ? 1 : 0; });
-      $('hint').classList.add('hidden');
-    };
-    a.onTargetLost = () => $('hint').classList.remove('hidden');
-    anchors.push(a);
-  });
+    }
+    lastSeen = now; hasTarget = true;
+  };
 
-  await mindar.start();
+  function grab(now) {
+    if (busy || video.readyState < 2) return;
+    const vw = video.videoWidth, vh = video.videoHeight;
+    // search the whole frame, or a crop around the code while it is tracked
+    let ox = 0, oy = 0, cw = vw, ch = vh, max = DET_SEARCH;
+    if (lastPts && now - lastSeen < LOST_MS) {
+      const xs = lastPts.map(p => p.x), ys = lastPts.map(p => p.y);
+      const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+      const half = ROI_K / 2 * Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+      ox = Math.max(0, Math.floor(cx - half)); oy = Math.max(0, Math.floor(cy - half));
+      cw = Math.min(vw, Math.ceil(cx + half)) - ox; ch = Math.min(vh, Math.ceil(cy + half)) - oy;
+      max = DET_TRACK;
+    }
+    const s = Math.min(1, max / Math.max(cw, ch));
+    const w = Math.max(1, Math.round(cw * s)), h = Math.max(1, Math.round(ch * s));
+    if (det.width !== w || det.height !== h) { det.width = w; det.height = h; }
+    dctx.drawImage(video, ox, oy, cw, ch, 0, 0, w, h);
+    const buf = dctx.getImageData(0, 0, w, h).data.buffer;
+    busy = true;
+    worker.postMessage({ buf, width: w, height: h, ctx: { ox, oy, s } }, [buf]);
+  }
+
+  // Canvas and camera follow the video's native size (it changes on rotation).
+  let vwPrev = 0, vhPrev = 0;
+  function fitCamera() {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || (vw === vwPrev && vh === vhPrev)) return;
+    vwPrev = vw; vhPrev = vh;
+    renderer.setPixelRatio(1);
+    renderer.setSize(vw, vh, false);
+    const f = FOCAL_K * Math.max(vw, vh);
+    camera.fov = 2 * Math.atan(vh / 2 / f) * 180 / Math.PI;
+    camera.aspect = vw / vh;
+    camera.updateProjectionMatrix();
+  }
+
   $('gate').remove();
   $('hint').classList.remove('hidden');
 
   let last = performance.now();
   renderer.setAnimationLoop(now => {
-    const dt = (now - last) / 1000; last = now;
-    if (frames.length && prev >= 0) {
+    const dt = Math.min(0.1, (now - last) / 1000); last = now;
+    fitCamera();
+    grab(now);
+
+    const visible = now - lastSeen < LOST_MS;
+    anchor.visible = visible;
+    $('hint').classList.toggle('hidden', visible);
+    if (visible && hasTarget) {
+      const k = 1 - Math.exp(-SMOOTH * dt);
+      anchor.position.lerp(tPos, k);
+      anchor.quaternion.slerp(tQuat, k);
+    }
+
+    if (visible && frames.length && prev >= 0) {
       fade += dt;
       const t = Math.min(1, fade / CROSSFADE);
       frames[cur].material.opacity = t;      // outgoing stays at 1 underneath
@@ -187,7 +301,7 @@ async function boot() {
         prev = -1;
       }
     }
-    if (frames.length) {
+    if (visible && frames.length) {
       if (cur === frames.length - 1) {
         // hold the fully grown plant for a beat, then start again
         hold += dt;
@@ -232,7 +346,7 @@ function show(i) {
   cur = next;
   const h = meta?.heights_m?.[cur];
   $('hud').innerHTML = `<b>${(cur + 1)}/${frames.length}</b> ` +
-    (meta?.frames?.[cur] ?? '') + (h ? `<br>${(h / plantMaxM * PLANT_MAX_QR * QR_REAL_M * 100).toFixed(0)} cm` : '') +
+    (meta?.frames?.[cur] ?? '') + (h ? `<br>${(h / plantH * PLANT_HEIGHT_M * 100).toFixed(0)} cm` : '') +
     `<br><span style="font-size:11px;opacity:.55">${BUILD}</span>`;
 }
 
