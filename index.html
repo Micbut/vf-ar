@@ -75,8 +75,8 @@ import { GLTFLoader }  from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { MindARThree } from 'mindar-image-three';
 
-const MODEL   = 'plant_growth_full.min.glb?v=2c2993dd';
-const TARGETS = 'targets.mind?v=2c2993dd';
+const MODEL   = 'plant_growth_full.min.glb?v=587750bc';
+const TARGETS = 'targets.mind?v=587750bc';
 const FPS     = 8;          // growth steps per second
 const END_HOLD = 2.0;       // seconds to hold the grown plant before looping
 const CROSSFADE = 0;        // 0 = hard cut. With a frame per simulation step at
@@ -87,11 +87,13 @@ const CROSSFADE = 0;        // 0 = hard cut. With a frame per simulation step at
 // sized in QR widths rather than metres, so it keeps the same proportion to the
 // code at any distance and whatever size the code is printed at.
 //
-// qrW is the QR's outer side (incl. quiet zone) in anchor units. Both targets
-// are centred on the code, so neither needs an offset.
+// qrW is the QR's outer side (incl. quiet zone) in anchor units; qrX/qrY is the
+// code's centre relative to the target's centre, in anchor units (+Y = up the
+// card). Measured from the compiled invitation PDF: on the 70 x 230 mm card the
+// code's centre sits 80 mm below the card's centre (80/70 = 1.142 units).
 const TARGETS_CFG = [
-  { label: 'invitation QR', qrW: 1       },   // target_invite.png IS the 69.5 mm code
-  { label: 'cover QR',      qrW: 45 / 50 },   // the cover's 45 mm code in a 50 mm crop
+  { label: 'invitation card', qrW: 0.9945, qrX: 0, qrY: -1.1421 },
+  { label: 'invitation QR',   qrW: 1,      qrX: 0, qrY: 0       },
 ];
 
 // Fully grown height: 18 cm on the invitation's 69.5 mm code.
@@ -107,7 +109,7 @@ function makeLoader() {
   return new GLTFLoader().setDRACOLoader(draco);
 }
 
-const BUILD = 'invite-target-18cm';  // shown in the HUD so a stale cache is obvious
+const BUILD = 'invite-card-18cm';  // shown in the HUD so a stale cache is obvious
 const $ = id => document.getElementById(id);
 let plantH = 1;
 let frames = [], meta = null, cur = 0, prev = -1, acc = 0, hold = 0, fade = 0, plant = null, anchors = [];
@@ -166,6 +168,7 @@ async function boot() {
     const a = mindar.addAnchor(i);
     a.onTargetFound = () => {
       plant.scale.setScalar(PLANT_H_QR * cfg.qrW / plantH);
+      plant.position.set(cfg.qrX, cfg.qrY, 0);
       a.group.add(plant);
       cur = 0; prev = -1; acc = 0; hold = 0; fade = 0;   // restart on acquisition
       frames.forEach((m, k) => { m.visible = k === 0; m.material.opacity = k === 0 ? 1 : 0; });
