@@ -21,6 +21,19 @@
   .overlay p  { margin:0; opacity:.75; max-width:30ch; }
   button { background:#FFF8FA; color:#34262E; border:0; border-radius:999px;
            padding:13px 26px; font-weight:600; font-size:16px; }
+  /* Intro: the photo spins in towards the viewer over 1 s and stops face-on,
+     then the text and Start button fade in underneath it. */
+  #kid { width:min(58vw,240px); justify-self:center;
+         animation:spinIn 1s cubic-bezier(.15,.75,.3,1) both; }
+  @keyframes spinIn {
+    from { transform:perspective(900px) translateZ(-600px) rotateY(-1080deg); opacity:0; }
+    15%  { opacity:1; }
+    to   { transform:perspective(900px) translateZ(0) rotateY(0); opacity:1; }
+  }
+  .after { display:grid; gap:18px; justify-items:center;
+           animation:fadeUp .5s ease 1s both; }
+  @keyframes fadeUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }
+  @media (prefers-reduced-motion: reduce) { #kid, .after { animation:none; } }
   #hint { position:fixed; left:0; right:0; bottom:0; z-index:5; pointer-events:none;
           padding:18px 20px calc(18px + env(safe-area-inset-bottom)); text-align:center;
           background:linear-gradient(to top,rgba(17,9,13,.85),transparent);
@@ -39,10 +52,13 @@
 <div id="hint" class="hidden">Point the camera at the QR code</div>
 
 <div class="overlay" id="gate">
-  <h1>Vertical Farming</h1>
-  <p>Point your camera at the QR code and watch the plant grow.</p>
-  <button id="go">Start</button>
-  <p style="font-size:13px;opacity:.5">Needs camera access. Works in Safari and Chrome.</p>
+  <img id="kid" src="kid.png" alt="">
+  <div class="after">
+    <h1>Vertical Farming</h1>
+    <p>Point your camera at the QR code and watch the plant grow.</p>
+    <button id="go">Start</button>
+    <p style="font-size:13px;opacity:.5">Needs camera access. Works in Safari and Chrome.</p>
+  </div>
 </div>
 <div class="overlay" id="fail" hidden>
   <h1>Could not start</h1><p id="failmsg"></p>
@@ -60,8 +76,8 @@ import * as THREE from 'three';
 import { GLTFLoader }  from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
-const MODEL   = 'plant_growth_full.min.glb?v=065ebbe0';
-const WORKER  = 'qr-worker.js?v=065ebbe0';
+const MODEL   = 'plant_growth_full.min.glb?v=9e044e52';
+const WORKER  = 'qr-worker.js?v=9e044e52';
 const FPS     = 8;          // growth steps per second
 const END_HOLD = 2.0;       // seconds to hold the grown plant before looping
 const CROSSFADE = 0;        // 0 = hard cut. With a frame per simulation step at
